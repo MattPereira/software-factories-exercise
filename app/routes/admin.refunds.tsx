@@ -1,14 +1,15 @@
-import { useEffect } from "react";
-import { data, isRouteErrorResponse, Link, useFetcher } from "react-router";
-import { toast } from "sonner";
+import {
+  data,
+  isRouteErrorResponse,
+  Link,
+  redirect,
+  useFetcher,
+} from "react-router";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
 import type { Route } from "./+types/admin.refunds";
-import { getCurrentUserId } from "~/lib/session";
+import { requireAdmin } from "~/lib/access.server";
 import { parseFormData } from "~/lib/validation";
 import { formatPrice } from "~/lib/utils";
-import { db } from "~/db";
-import { UserRole, users } from "~/db/schema";
 import {
   RefundDecisionError,
   approveRefundRequest,
@@ -31,10 +32,6 @@ const errorStatus: Record<RefundDecisionErrorCode, number> = {
   "not-admin": 403,
 };
 
-function getUserById(id: number) {
-  return db.select().from(users).where(eq(users.id, id)).get();
-}
-
 export function meta() {
   return [
     { title: "Refund Requests — Cadence" },
@@ -43,43 +40,20 @@ export function meta() {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("Select a user from the DevUI panel to manage refunds.", {
-      status: 401,
-    });
-  }
-
-  const currentUser = getUserById(currentUserId);
-
-  if (!currentUser || currentUser.role !== UserRole.Admin) {
-    throw data("Only admins can access this page.", { status: 403 });
-  }
-
+  await requireAdmin(request);
   return { openRefundRequests: listOpenRefundRequests() };
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("You must be logged in.", { status: 401 });
-  }
-
-  const currentUser = getUserById(currentUserId);
-  if (!currentUser || currentUser.role !== UserRole.Admin) {
-    throw data("Only admins can decide Refund Requests.", { status: 403 });
-  }
+  const { userId } = await requireAdmin(request);
 
   const formData = await request.formData();
   const parsed = parseFormData(formData, refundDecisionActionSchema);
 
   if (!parsed.success) {
-    return data(
-      { error: Object.values(parsed.errors)[0] ?? "Invalid input." },
-      { status: 400 }
-    );
+    throw data(Object.values(parsed.errors)[0] ?? "Invalid input.", {
+      status: 400,
+    });
   }
 
   const { intent, refundRequestId } = parsed.data;
@@ -87,18 +61,15 @@ export async function action({ request }: Route.ActionArgs) {
     intent === "approve" ? approveRefundRequest : declineRefundRequest;
 
   try {
-    decide({ refundRequestId, adminUserId: currentUserId });
+    decide(refundRequestId, userId);
   } catch (error) {
     if (error instanceof RefundDecisionError) {
-      return data(
-        { error: error.message },
-        { status: errorStatus[error.code] }
-      );
+      throw data(error.message, { status: errorStatus[error.code] });
     }
     throw error;
   }
 
-  return { success: true as const, intent };
+  throw redirect("/admin/refunds");
 }
 
 function OpenRefundRequestRow({
@@ -106,22 +77,9 @@ function OpenRefundRequestRow({
 }: {
   refundRequest: Route.ComponentProps["loaderData"]["openRefundRequests"][number];
 }) {
-  const fetcher = useFetcher<typeof action>();
+  const fetcher = useFetcher();
   const busy = fetcher.state !== "idle";
   const pendingIntent = fetcher.formData?.get("intent");
-
-  useEffect(() => {
-    if (fetcher.state !== "idle" || !fetcher.data) return;
-    if ("error" in fetcher.data) {
-      toast.error(fetcher.data.error);
-    } else {
-      toast.success(
-        fetcher.data.intent === "approve"
-          ? "Refund Request approved. The learner's Enrollment has ended."
-          : "Refund Request declined."
-      );
-    }
-  }, [fetcher.state, fetcher.data]);
 
   return (
     <tr className="border-b border-border align-top last:border-0">

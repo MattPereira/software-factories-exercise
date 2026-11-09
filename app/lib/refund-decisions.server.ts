@@ -11,24 +11,38 @@ import {
 } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 
-export function listOpenRefundRequests() {
+// Refund Request joined to its purchase, learner and course.
+function selectRefundRequests() {
   return db
     .select({
-      id: refunds.id,
-      reason: refunds.reason,
-      requestedAt: refunds.requestedAt,
-      amountPaid: purchases.amountPaid,
+      refundRequest: refunds,
       learnerName: users.name,
       learnerEmail: users.email,
       courseTitle: courses.title,
+      learnerId: purchases.userId,
+      courseId: purchases.courseId,
+      amountPaid: purchases.amountPaid,
     })
     .from(refunds)
     .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
     .innerJoin(users, eq(purchases.userId, users.id))
-    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .innerJoin(courses, eq(purchases.courseId, courses.id));
+}
+
+export function listOpenRefundRequests() {
+  return selectRefundRequests()
     .where(eq(refunds.status, RefundStatus.Open))
     .orderBy(asc(refunds.requestedAt), asc(refunds.id))
-    .all();
+    .all()
+    .map((row) => ({
+      id: row.refundRequest.id,
+      reason: row.refundRequest.reason,
+      requestedAt: row.refundRequest.requestedAt,
+      amountPaid: row.amountPaid,
+      learnerName: row.learnerName,
+      learnerEmail: row.learnerEmail,
+      courseTitle: row.courseTitle,
+    }));
 }
 
 export type RefundDecisionErrorCode = "not-found" | "not-open" | "not-admin";
@@ -49,67 +63,54 @@ export interface DecisionEmail {
   body: string;
 }
 
+type FoundRefundRequest = NonNullable<
+  ReturnType<typeof getRefundRequestWithLearner>
+>;
+
 function getRefundRequestWithLearner(refundRequestId: number) {
-  return db
-    .select({
-      refundRequest: refunds,
-      learnerName: users.name,
-      learnerEmail: users.email,
-      courseTitle: courses.title,
-      learnerId: purchases.userId,
-      courseId: purchases.courseId,
-      amountPaid: purchases.amountPaid,
-    })
-    .from(refunds)
-    .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
-    .innerJoin(users, eq(purchases.userId, users.id))
-    .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(eq(refunds.id, refundRequestId))
-    .get();
+  return selectRefundRequests().where(eq(refunds.id, refundRequestId)).get();
 }
 
-function buildDeclinedEmail(input: {
-  learnerName: string;
-  learnerEmail: string;
-  courseTitle: string;
-}): DecisionEmail {
+function buildDecisionEmail(
+  found: FoundRefundRequest,
+  subject: string,
+  paragraphs: string[][]
+): DecisionEmail {
   return {
-    to: input.learnerEmail,
-    subject: `Refund Request declined — ${input.courseTitle}`,
+    to: found.learnerEmail,
+    subject: `${subject} — ${found.courseTitle}`,
     body: [
-      `Hi ${input.learnerName},`,
-      "",
-      `We have looked at your Refund Request for "${input.courseTitle}" and declined it.`,
-      "Nothing changes on your account: you still have access to the course.",
-      "",
-      "If something changes, you may raise a new Refund Request from the course page.",
+      `Hi ${found.learnerName},`,
+      ...paragraphs.flatMap((lines) => ["", ...lines]),
       "",
       "— The Cadence team",
     ].join("\n"),
   };
 }
 
-function buildApprovedEmail(input: {
-  learnerName: string;
-  learnerEmail: string;
-  courseTitle: string;
-  amountRefunded: number;
-}): DecisionEmail {
-  return {
-    to: input.learnerEmail,
-    subject: `Refund Request approved — ${input.courseTitle}`,
-    body: [
-      `Hi ${input.learnerName},`,
-      "",
-      `We have approved your Refund Request for "${input.courseTitle}".`,
-      `Your Refund is for ${formatPrice(input.amountRefunded)}, the full amount you paid.`,
-      "",
+function buildDeclinedEmail(found: FoundRefundRequest) {
+  return buildDecisionEmail(found, "Refund Request declined", [
+    [
+      `We have looked at your Refund Request for "${found.courseTitle}" and declined it.`,
+      "Nothing changes on your account: you still have access to the course.",
+    ],
+    [
+      "If something changes, you may raise a new Refund Request from the course page.",
+    ],
+  ]);
+}
+
+function buildApprovedEmail(found: FoundRefundRequest) {
+  return buildDecisionEmail(found, "Refund Request approved", [
+    [
+      `We have approved your Refund Request for "${found.courseTitle}".`,
+      `Your Refund is for ${formatPrice(found.amountPaid)}, the full amount you paid.`,
+    ],
+    [
       "Your Enrollment has ended, so you no longer have access to the course content.",
       "Your progress is kept: if you buy the course again, you will pick up where you left off.",
-      "",
-      "— The Cadence team",
-    ].join("\n"),
-  };
+    ],
+  ]);
 }
 
 // No mail transport is wired up yet, so decision emails go to the server log.
@@ -131,120 +132,98 @@ function assertAdmin(userId: number) {
   }
 }
 
-export function declineRefundRequest(input: {
-  refundRequestId: number;
-  adminUserId: number;
-  now?: Date;
-}) {
-  assertAdmin(input.adminUserId);
-  const found = getRefundRequestWithLearner(input.refundRequestId);
+function alreadyDecided() {
+  return new RefundDecisionError(
+    "not-open",
+    "This Refund Request has already been decided."
+  );
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Shared guard order (admin -> found -> Open), then a transaction whose update
+// re-checks Open so two admins cannot decide the same request at once.
+function decideRefundRequest(
+  refundRequestId: number,
+  adminUserId: number,
+  now: Date,
+  decision: {
+    status: RefundStatus.Approved | RefundStatus.Declined;
+    amountRefunded: (found: FoundRefundRequest) => number | null;
+    alsoInTransaction?: (tx: Tx, found: FoundRefundRequest) => void;
+    buildEmail: (found: FoundRefundRequest) => DecisionEmail;
+  }
+) {
+  assertAdmin(adminUserId);
+  const found = getRefundRequestWithLearner(refundRequestId);
   if (!found) {
     throw new RefundDecisionError("not-found", "Refund Request not found.");
   }
   if (found.refundRequest.status !== RefundStatus.Open) {
-    throw new RefundDecisionError(
-      "not-open",
-      "This Refund Request has already been decided."
-    );
+    throw alreadyDecided();
   }
-  const now = input.now ?? new Date();
 
-  const refundRequest = db
-    .update(refunds)
-    .set({
-      status: RefundStatus.Declined,
-      resolvedAt: now.toISOString(),
-      resolvedByUserId: input.adminUserId,
-    })
-    // Re-checking Open here stops two admins deciding the same request at once.
-    .where(
-      and(
-        eq(refunds.id, input.refundRequestId),
-        eq(refunds.status, RefundStatus.Open)
+  const refundRequest = db.transaction((tx) => {
+    const updated = tx
+      .update(refunds)
+      .set({
+        status: decision.status,
+        resolvedAt: now.toISOString(),
+        resolvedByUserId: adminUserId,
+        amountRefunded: decision.amountRefunded(found),
+      })
+      .where(
+        and(eq(refunds.id, refundRequestId), eq(refunds.status, RefundStatus.Open))
       )
-    )
-    .returning()
-    .get();
+      .returning()
+      .get();
 
-  if (!refundRequest) {
-    throw new RefundDecisionError(
-      "not-open",
-      "This Refund Request has already been decided."
-    );
-  }
+    if (updated) decision.alsoInTransaction?.(tx, found);
+    return updated;
+  });
 
-  const email = buildDeclinedEmail(found);
+  if (!refundRequest) throw alreadyDecided();
+
+  const email = decision.buildEmail(found);
   logEmail(email);
 
   return { refundRequest, email };
 }
 
-export function approveRefundRequest(input: {
-  refundRequestId: number;
-  adminUserId: number;
-  now?: Date;
-}) {
-  assertAdmin(input.adminUserId);
-  const found = getRefundRequestWithLearner(input.refundRequestId);
-  if (!found) {
-    throw new RefundDecisionError("not-found", "Refund Request not found.");
-  }
-  if (found.refundRequest.status !== RefundStatus.Open) {
-    throw new RefundDecisionError(
-      "not-open",
-      "This Refund Request has already been decided."
-    );
-  }
-  const now = input.now ?? new Date();
-
-  // One transaction so access never ends without the Refund being recorded,
-  // or the other way round (ADR 0001).
-  const refundRequest = db.transaction((tx) => {
-    const updated = tx
-      .update(refunds)
-      .set({
-        status: RefundStatus.Approved,
-        resolvedAt: now.toISOString(),
-        resolvedByUserId: input.adminUserId,
-        amountRefunded: found.amountPaid,
-      })
-      .where(
-        and(
-          eq(refunds.id, input.refundRequestId),
-          eq(refunds.status, RefundStatus.Open)
-        )
-      )
-      .returning()
-      .get();
-
-    if (!updated) return undefined;
-
-    // Hard delete (ADR 0001). Progress, watch events and quiz attempts are
-    // keyed by user, not Enrollment, so they survive for a later re-purchase.
-    tx.delete(enrollments)
-      .where(
-        and(
-          eq(enrollments.userId, found.learnerId),
-          eq(enrollments.courseId, found.courseId)
-        )
-      )
-      .run();
-
-    return updated;
+export function declineRefundRequest(
+  refundRequestId: number,
+  adminUserId: number,
+  now = new Date()
+) {
+  return decideRefundRequest(refundRequestId, adminUserId, now, {
+    status: RefundStatus.Declined,
+    amountRefunded: () => null,
+    buildEmail: buildDeclinedEmail,
   });
+}
 
-  if (!refundRequest) {
-    throw new RefundDecisionError(
-      "not-open",
-      "This Refund Request has already been decided."
-    );
-  }
-
-  const email = buildApprovedEmail({
-    ...found,
-    amountRefunded: found.amountPaid,
+export function approveRefundRequest(
+  refundRequestId: number,
+  adminUserId: number,
+  now = new Date()
+) {
+  return decideRefundRequest(refundRequestId, adminUserId, now, {
+    status: RefundStatus.Approved,
+    amountRefunded: (found) => found.amountPaid,
+    // Same transaction as the status update so access never ends without the
+    // Refund being recorded, or the other way round. Hard delete (ADR 0001):
+    // progress, watch events and quiz attempts are keyed by user, not
+    // Enrollment, so they survive for a later re-purchase.
+    alsoInTransaction: (tx, found) => {
+      tx.delete(enrollments)
+        .where(
+          and(
+            eq(enrollments.userId, found.learnerId),
+            eq(enrollments.courseId, found.courseId)
+          )
+        )
+        .run();
+    },
+    buildEmail: buildApprovedEmail,
   });
-  logEmail(email);
-
-  return { refundRequest, email };
 }
