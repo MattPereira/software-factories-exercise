@@ -8,7 +8,10 @@ import {
   approveRefundRequest,
   declineRefundRequest,
   listOpenRefundRequests,
+  type RefundDecisionErrorCode,
 } from "./refund-decisions.server";
+import { getAccess } from "~/lib/access.server";
+import { setCurrentUserId } from "~/lib/session";
 
 const getDb = useTestDb();
 
@@ -16,15 +19,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function expectDecisionError(run: () => unknown, code: string) {
-  let thrown: unknown;
-  try {
-    run();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown).toBeInstanceOf(RefundDecisionError);
-  expect((thrown as RefundDecisionError).code).toBe(code);
+function expectDecisionError(
+  run: () => unknown,
+  code: RefundDecisionErrorCode
+) {
+  expect(run).toThrow(RefundDecisionError);
+  expect(run).toThrow(expect.objectContaining({ code }));
 }
 
 function seedAdmin() {
@@ -120,11 +120,7 @@ describe("declineRefundRequest", () => {
     const { admin, request } = seedOpenRequest();
     const now = new Date("2026-11-09T12:00:00.000Z");
 
-    const { refundRequest } = declineRefundRequest({
-      refundRequestId: request.id,
-      adminUserId: admin.id,
-      now,
-    });
+    const { refundRequest } = declineRefundRequest(request.id, admin.id, now);
 
     expect(refundRequest).toMatchObject({
       id: request.id,
@@ -140,7 +136,7 @@ describe("declineRefundRequest", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request, enrollment, user } = seedOpenRequest();
 
-    declineRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    declineRefundRequest(request.id, admin.id);
 
     const remaining = getDb().select().from(schema.enrollments).all();
     expect(remaining).toEqual([enrollment]);
@@ -151,10 +147,7 @@ describe("declineRefundRequest", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request } = seedOpenRequest();
 
-    const { email } = declineRefundRequest({
-      refundRequestId: request.id,
-      adminUserId: admin.id,
-    });
+    const { email } = declineRefundRequest(request.id, admin.id);
 
     expect(email.to).toBe("test@example.com");
     expect(email.subject).toBe("Refund Request declined — Test Course");
@@ -170,7 +163,7 @@ describe("declineRefundRequest", () => {
     const admin = seedAdmin();
 
     expectDecisionError(
-      () => declineRefundRequest({ refundRequestId: 999, adminUserId: admin.id }),
+      () => declineRefundRequest(999, admin.id),
       "not-found"
     );
   });
@@ -178,11 +171,11 @@ describe("declineRefundRequest", () => {
   it("fails clearly when the Refund Request is no longer Open", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request } = seedOpenRequest();
-    declineRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    declineRefundRequest(request.id, admin.id);
 
     expectDecisionError(
       () =>
-        declineRefundRequest({ refundRequestId: request.id, adminUserId: admin.id }),
+        declineRefundRequest(request.id, admin.id),
       "not-open"
     );
   });
@@ -193,15 +186,12 @@ describe("declineRefundRequest", () => {
     for (const nonAdmin of [user, instructor]) {
       expectDecisionError(
         () =>
-          declineRefundRequest({
-            refundRequestId: request.id,
-            adminUserId: nonAdmin.id,
-          }),
+          declineRefundRequest(request.id, nonAdmin.id),
         "not-admin"
       );
     }
     expectDecisionError(
-      () => declineRefundRequest({ refundRequestId: request.id, adminUserId: 999 }),
+      () => declineRefundRequest(request.id, 999),
       "not-admin"
     );
     expect(listOpenRefundRequests().map((r) => r.id)).toEqual([request.id]);
@@ -223,11 +213,7 @@ describe("approveRefundRequest", () => {
     const { admin, request } = seedOpenRequest();
     const now = new Date("2026-11-09T12:00:00.000Z");
 
-    const { refundRequest } = approveRefundRequest({
-      refundRequestId: request.id,
-      adminUserId: admin.id,
-      now,
-    });
+    const { refundRequest } = approveRefundRequest(request.id, admin.id, now);
 
     expect(refundRequest).toMatchObject({
       id: request.id,
@@ -243,7 +229,7 @@ describe("approveRefundRequest", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request } = seedOpenRequest();
 
-    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    approveRefundRequest(request.id, admin.id);
 
     expect(getDb().select().from(schema.enrollments).all()).toEqual([]);
   });
@@ -273,12 +259,32 @@ describe("approveRefundRequest", () => {
       .get();
     const otherLearnerEnrollment = seedEnrollment(otherLearner.id, course.id);
 
-    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    approveRefundRequest(request.id, admin.id);
 
     expect(getDb().select().from(schema.enrollments).all()).toEqual([
       otherCourseEnrollment,
       otherLearnerEnrollment,
     ]);
+  });
+
+  async function requestAs(userId: number) {
+    const setCookie = await setCurrentUserId(new Request("http://test"), userId);
+    const cookie = setCookie.split(";")[0];
+    return new Request("http://test", { headers: { Cookie: cookie } });
+  }
+
+  it("takes away the learner's course access, which comes back when they enroll again", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request, user, course } = seedOpenRequest();
+    const asLearner = await requestAs(user.id);
+    expect((await getAccess(asLearner, course.id)).canViewContent).toBe(true);
+
+    approveRefundRequest(request.id, admin.id);
+    expect((await getAccess(asLearner, course.id)).canViewContent).toBe(false);
+
+    seedPurchase(user.id, course.id, 7900);
+    seedEnrollment(user.id, course.id);
+    expect((await getAccess(asLearner, course.id)).canViewContent).toBe(true);
   });
 
   function seedLearnerProgress(userId: number, courseId: number) {
@@ -363,7 +369,7 @@ describe("approveRefundRequest", () => {
     expect(before.quizAttempts).toHaveLength(1);
     expect(before.quizAnswers).toHaveLength(1);
 
-    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    approveRefundRequest(request.id, admin.id);
 
     expect(snapshotProgress()).toEqual(before);
   });
@@ -374,7 +380,7 @@ describe("approveRefundRequest", () => {
     seedLearnerProgress(user.id, course.id);
     const before = snapshotProgress();
 
-    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    approveRefundRequest(request.id, admin.id);
     seedPurchase(user.id, course.id, 7900);
     const fresh = seedEnrollment(user.id, course.id);
 
@@ -386,10 +392,7 @@ describe("approveRefundRequest", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request } = seedOpenRequest();
 
-    const { email } = approveRefundRequest({
-      refundRequestId: request.id,
-      adminUserId: admin.id,
-    });
+    const { email } = approveRefundRequest(request.id, admin.id);
 
     expect(email.to).toBe("test@example.com");
     expect(email.subject).toBe("Refund Request approved — Test Course");
@@ -405,7 +408,7 @@ describe("approveRefundRequest", () => {
     const admin = seedAdmin();
 
     expectDecisionError(
-      () => approveRefundRequest({ refundRequestId: 999, adminUserId: admin.id }),
+      () => approveRefundRequest(999, admin.id),
       "not-found"
     );
   });
@@ -413,7 +416,7 @@ describe("approveRefundRequest", () => {
   it("fails clearly when the Refund Request is already Approved or Declined", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { admin, request, purchase } = seedOpenRequest();
-    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    approveRefundRequest(request.id, admin.id);
     const declined = seedRefundRequest(purchase.id, {
       status: RefundStatus.Declined,
     });
@@ -421,10 +424,7 @@ describe("approveRefundRequest", () => {
     for (const decided of [request, declined]) {
       expectDecisionError(
         () =>
-          approveRefundRequest({
-            refundRequestId: decided.id,
-            adminUserId: admin.id,
-          }),
+          approveRefundRequest(decided.id, admin.id),
         "not-open"
       );
     }
@@ -436,10 +436,7 @@ describe("approveRefundRequest", () => {
     for (const nonAdminId of [user.id, instructor.id, 999]) {
       expectDecisionError(
         () =>
-          approveRefundRequest({
-            refundRequestId: request.id,
-            adminUserId: nonAdminId,
-          }),
+          approveRefundRequest(request.id, nonAdminId),
         "not-admin"
       );
     }
