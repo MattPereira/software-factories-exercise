@@ -34,3 +34,9 @@ _Avoid_: Completed, Paid out
 
 **Failed Refund**:
 A Refund where the money couldn't be sent. The Refund Request stays approved, because the decision hasn't changed.
+
+### Access
+
+**Enrollment**:
+A learner's access to a course. It is separate from the Purchase that paid for it. An approved Refund Request ends the Enrollment, but the learner's progress outlives it.
+_Avoid_: Purchase (for access), Seat, Registration
