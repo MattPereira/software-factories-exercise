@@ -2,12 +2,14 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "~/db";
 import {
   courses,
+  enrollments,
   purchases,
   refunds,
   users,
   RefundStatus,
   UserRole,
 } from "~/db/schema";
+import { formatPrice } from "~/lib/utils";
 
 export function listOpenRefundRequests() {
   return db
@@ -54,6 +56,9 @@ function getRefundRequestWithLearner(refundRequestId: number) {
       learnerName: users.name,
       learnerEmail: users.email,
       courseTitle: courses.title,
+      learnerId: purchases.userId,
+      courseId: purchases.courseId,
+      amountPaid: purchases.amountPaid,
     })
     .from(refunds)
     .innerJoin(purchases, eq(refunds.purchaseId, purchases.id))
@@ -78,6 +83,29 @@ function buildDeclinedEmail(input: {
       "Nothing changes on your account: you still have access to the course.",
       "",
       "If something changes, you may raise a new Refund Request from the course page.",
+      "",
+      "— The Cadence team",
+    ].join("\n"),
+  };
+}
+
+function buildApprovedEmail(input: {
+  learnerName: string;
+  learnerEmail: string;
+  courseTitle: string;
+  amountRefunded: number;
+}): DecisionEmail {
+  return {
+    to: input.learnerEmail,
+    subject: `Refund Request approved — ${input.courseTitle}`,
+    body: [
+      `Hi ${input.learnerName},`,
+      "",
+      `We have approved your Refund Request for "${input.courseTitle}".`,
+      `Your Refund is for ${formatPrice(input.amountRefunded)}, the full amount you paid.`,
+      "",
+      "Your Enrollment has ended, so you no longer have access to the course content.",
+      "Your progress is kept: if you buy the course again, you will pick up where you left off.",
       "",
       "— The Cadence team",
     ].join("\n"),
@@ -146,6 +174,76 @@ export function declineRefundRequest(input: {
   }
 
   const email = buildDeclinedEmail(found);
+  logEmail(email);
+
+  return { refundRequest, email };
+}
+
+export function approveRefundRequest(input: {
+  refundRequestId: number;
+  adminUserId: number;
+  now?: Date;
+}) {
+  assertAdmin(input.adminUserId);
+  const found = getRefundRequestWithLearner(input.refundRequestId);
+  if (!found) {
+    throw new RefundDecisionError("not-found", "Refund Request not found.");
+  }
+  if (found.refundRequest.status !== RefundStatus.Open) {
+    throw new RefundDecisionError(
+      "not-open",
+      "This Refund Request has already been decided."
+    );
+  }
+  const now = input.now ?? new Date();
+
+  // One transaction so access never ends without the Refund being recorded,
+  // or the other way round (ADR 0001).
+  const refundRequest = db.transaction((tx) => {
+    const updated = tx
+      .update(refunds)
+      .set({
+        status: RefundStatus.Approved,
+        resolvedAt: now.toISOString(),
+        resolvedByUserId: input.adminUserId,
+        amountRefunded: found.amountPaid,
+      })
+      .where(
+        and(
+          eq(refunds.id, input.refundRequestId),
+          eq(refunds.status, RefundStatus.Open)
+        )
+      )
+      .returning()
+      .get();
+
+    if (!updated) return undefined;
+
+    // Hard delete (ADR 0001). Progress, watch events and quiz attempts are
+    // keyed by user, not Enrollment, so they survive for a later re-purchase.
+    tx.delete(enrollments)
+      .where(
+        and(
+          eq(enrollments.userId, found.learnerId),
+          eq(enrollments.courseId, found.courseId)
+        )
+      )
+      .run();
+
+    return updated;
+  });
+
+  if (!refundRequest) {
+    throw new RefundDecisionError(
+      "not-open",
+      "This Refund Request has already been decided."
+    );
+  }
+
+  const email = buildApprovedEmail({
+    ...found,
+    amountRefunded: found.amountPaid,
+  });
   logEmail(email);
 
   return { refundRequest, email };

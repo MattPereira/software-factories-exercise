@@ -5,6 +5,7 @@ import * as schema from "~/db/schema";
 import { RefundStatus, UserRole } from "~/db/schema";
 import {
   RefundDecisionError,
+  approveRefundRequest,
   declineRefundRequest,
   listOpenRefundRequests,
 } from "./refund-decisions.server";
@@ -204,5 +205,247 @@ describe("declineRefundRequest", () => {
       "not-admin"
     );
     expect(listOpenRefundRequests().map((r) => r.id)).toEqual([request.id]);
+  });
+});
+
+describe("approveRefundRequest", () => {
+  function seedOpenRequest() {
+    const base = seedBaseData(getDb());
+    const admin = seedAdmin();
+    const purchase = seedPurchase(base.user.id, base.course.id, 7900);
+    const enrollment = seedEnrollment(base.user.id, base.course.id);
+    const request = seedRefundRequest(purchase.id);
+    return { ...base, admin, purchase, enrollment, request };
+  }
+
+  it("makes it an Approved Refund Request resolved by the admin, refunding the full amount paid", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request } = seedOpenRequest();
+    const now = new Date("2026-11-09T12:00:00.000Z");
+
+    const { refundRequest } = approveRefundRequest({
+      refundRequestId: request.id,
+      adminUserId: admin.id,
+      now,
+    });
+
+    expect(refundRequest).toMatchObject({
+      id: request.id,
+      status: RefundStatus.Approved,
+      resolvedAt: "2026-11-09T12:00:00.000Z",
+      resolvedByUserId: admin.id,
+      amountRefunded: 7900,
+    });
+    expect(listOpenRefundRequests()).toEqual([]);
+  });
+
+  it("ends the learner's Enrollment in the refunded course so they lose access", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request } = seedOpenRequest();
+
+    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+
+    expect(getDb().select().from(schema.enrollments).all()).toEqual([]);
+  });
+
+  it("leaves the learner's other Enrollments and other learners' Enrollments alone", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request, user, instructor, category, course } =
+      seedOpenRequest();
+    const otherCourse = getDb()
+      .insert(schema.courses)
+      .values({
+        title: "Other Course",
+        slug: "other-course",
+        description: "Another course",
+        salesCopy: "Another course",
+        instructorId: instructor.id,
+        categoryId: category.id,
+        status: schema.CourseStatus.Published,
+      })
+      .returning()
+      .get();
+    const otherCourseEnrollment = seedEnrollment(user.id, otherCourse.id);
+    const otherLearner = getDb()
+      .insert(schema.users)
+      .values({ name: "Bo", email: "bo@example.com", role: UserRole.Student })
+      .returning()
+      .get();
+    const otherLearnerEnrollment = seedEnrollment(otherLearner.id, course.id);
+
+    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+
+    expect(getDb().select().from(schema.enrollments).all()).toEqual([
+      otherCourseEnrollment,
+      otherLearnerEnrollment,
+    ]);
+  });
+
+  function seedLearnerProgress(userId: number, courseId: number) {
+    const db = getDb();
+    const mod = db
+      .insert(schema.modules)
+      .values({ courseId, title: "Module 1", position: 1 })
+      .returning()
+      .get();
+    const lesson = db
+      .insert(schema.lessons)
+      .values({ moduleId: mod.id, title: "Lesson 1", position: 1 })
+      .returning()
+      .get();
+    const quiz = db
+      .insert(schema.quizzes)
+      .values({ lessonId: lesson.id, title: "Quiz 1", passingScore: 0.5 })
+      .returning()
+      .get();
+    const question = db
+      .insert(schema.quizQuestions)
+      .values({
+        quizId: quiz.id,
+        questionText: "Is this kept?",
+        questionType: schema.QuestionType.TrueFalse,
+        position: 1,
+      })
+      .returning()
+      .get();
+    const option = db
+      .insert(schema.quizOptions)
+      .values({ questionId: question.id, optionText: "Yes", isCorrect: true })
+      .returning()
+      .get();
+    db.insert(schema.lessonProgress)
+      .values({
+        userId,
+        lessonId: lesson.id,
+        status: schema.LessonProgressStatus.Completed,
+        completedAt: "2026-11-02T10:00:00.000Z",
+      })
+      .run();
+    db.insert(schema.videoWatchEvents)
+      .values({
+        userId,
+        lessonId: lesson.id,
+        eventType: "pause",
+        positionSeconds: 3600,
+      })
+      .run();
+    const attempt = db
+      .insert(schema.quizAttempts)
+      .values({ userId, quizId: quiz.id, score: 1, passed: true })
+      .returning()
+      .get();
+    db.insert(schema.quizAnswers)
+      .values({
+        attemptId: attempt.id,
+        questionId: question.id,
+        selectedOptionId: option.id,
+      })
+      .run();
+  }
+
+  function snapshotProgress() {
+    const db = getDb();
+    return {
+      lessonProgress: db.select().from(schema.lessonProgress).all(),
+      videoWatchEvents: db.select().from(schema.videoWatchEvents).all(),
+      quizAttempts: db.select().from(schema.quizAttempts).all(),
+      quizAnswers: db.select().from(schema.quizAnswers).all(),
+    };
+  }
+
+  it("keeps lesson progress, video watch events, quiz attempts and quiz answers", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request, user, course } = seedOpenRequest();
+    seedLearnerProgress(user.id, course.id);
+    const before = snapshotProgress();
+    expect(before.lessonProgress).toHaveLength(1);
+    expect(before.videoWatchEvents).toHaveLength(1);
+    expect(before.quizAttempts).toHaveLength(1);
+    expect(before.quizAnswers).toHaveLength(1);
+
+    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+
+    expect(snapshotProgress()).toEqual(before);
+  });
+
+  it("lets the learner enroll again afterwards and pick up their earlier progress", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request, user, course } = seedOpenRequest();
+    seedLearnerProgress(user.id, course.id);
+    const before = snapshotProgress();
+
+    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    seedPurchase(user.id, course.id, 7900);
+    const fresh = seedEnrollment(user.id, course.id);
+
+    expect(getDb().select().from(schema.enrollments).all()).toEqual([fresh]);
+    expect(snapshotProgress()).toEqual(before);
+  });
+
+  it("logs an approved email with the Refund amount, that access has ended, and that progress is kept", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request } = seedOpenRequest();
+
+    const { email } = approveRefundRequest({
+      refundRequestId: request.id,
+      adminUserId: admin.id,
+    });
+
+    expect(email.to).toBe("test@example.com");
+    expect(email.subject).toBe("Refund Request approved — Test Course");
+    expect(email.body).toContain("$79.00");
+    expect(email.body).toContain("no longer have access");
+    expect(email.body).toContain("progress is kept");
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("[email] to=test@example.com")
+    );
+  });
+
+  it("fails clearly when the Refund Request does not exist", () => {
+    const admin = seedAdmin();
+
+    expectDecisionError(
+      () => approveRefundRequest({ refundRequestId: 999, adminUserId: admin.id }),
+      "not-found"
+    );
+  });
+
+  it("fails clearly when the Refund Request is already Approved or Declined", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { admin, request, purchase } = seedOpenRequest();
+    approveRefundRequest({ refundRequestId: request.id, adminUserId: admin.id });
+    const declined = seedRefundRequest(purchase.id, {
+      status: RefundStatus.Declined,
+    });
+
+    for (const decided of [request, declined]) {
+      expectDecisionError(
+        () =>
+          approveRefundRequest({
+            refundRequestId: decided.id,
+            adminUserId: admin.id,
+          }),
+        "not-open"
+      );
+    }
+  });
+
+  it("refuses a non-admin, leaving the request Open and the Enrollment in place", () => {
+    const { user, instructor, request, enrollment } = seedOpenRequest();
+
+    for (const nonAdminId of [user.id, instructor.id, 999]) {
+      expectDecisionError(
+        () =>
+          approveRefundRequest({
+            refundRequestId: request.id,
+            adminUserId: nonAdminId,
+          }),
+        "not-admin"
+      );
+    }
+    expect(listOpenRefundRequests().map((r) => r.id)).toEqual([request.id]);
+    expect(getDb().select().from(schema.enrollments).all()).toEqual([
+      enrollment,
+    ]);
   });
 });
