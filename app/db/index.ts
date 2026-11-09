@@ -39,9 +39,19 @@ function openDatabase(filename: string) {
   }
 }
 
-let instance: ReturnType<typeof drizzle<typeof schema>> | undefined;
+type Db = ReturnType<typeof drizzle<typeof schema>>;
+
+let instance: Db | undefined;
+let override: Db | undefined;
+
+// Test-only: points the shared `db` handle at another database (see
+// app/test/db.ts). Pass undefined to go back to data.db.
+export function setDbOverride(next: Db | undefined) {
+  override = next;
+}
 
 function getDb() {
+  if (override) return override;
   if (!instance) {
     instance = drizzle(getSqlite(), { schema });
   }
