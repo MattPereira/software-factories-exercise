@@ -11,6 +11,7 @@ import { db } from "~/db";
 import { UserRole, users } from "~/db/schema";
 import {
   RefundDecisionError,
+  approveRefundRequest,
   declineRefundRequest,
   listOpenRefundRequests,
   type RefundDecisionErrorCode,
@@ -20,7 +21,7 @@ import { Button } from "~/components/ui/button";
 import { AlertTriangle, Undo2 } from "lucide-react";
 
 const refundDecisionActionSchema = z.object({
-  intent: z.literal("decline"),
+  intent: z.enum(["approve", "decline"]),
   refundRequestId: z.coerce.number().int(),
 });
 
@@ -81,11 +82,12 @@ export async function action({ request }: Route.ActionArgs) {
     );
   }
 
+  const { intent, refundRequestId } = parsed.data;
+  const decide =
+    intent === "approve" ? approveRefundRequest : declineRefundRequest;
+
   try {
-    declineRefundRequest({
-      refundRequestId: parsed.data.refundRequestId,
-      adminUserId: currentUserId,
-    });
+    decide({ refundRequestId, adminUserId: currentUserId });
   } catch (error) {
     if (error instanceof RefundDecisionError) {
       return data(
@@ -96,7 +98,7 @@ export async function action({ request }: Route.ActionArgs) {
     throw error;
   }
 
-  return { success: true as const };
+  return { success: true as const, intent };
 }
 
 function OpenRefundRequestRow({
@@ -105,13 +107,19 @@ function OpenRefundRequestRow({
   refundRequest: Route.ComponentProps["loaderData"]["openRefundRequests"][number];
 }) {
   const fetcher = useFetcher<typeof action>();
+  const busy = fetcher.state !== "idle";
+  const pendingIntent = fetcher.formData?.get("intent");
 
   useEffect(() => {
     if (fetcher.state !== "idle" || !fetcher.data) return;
     if ("error" in fetcher.data) {
       toast.error(fetcher.data.error);
     } else {
-      toast.success("Refund Request declined.");
+      toast.success(
+        fetcher.data.intent === "approve"
+          ? "Refund Request approved. The learner's Enrollment has ended."
+          : "Refund Request declined."
+      );
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -132,8 +140,7 @@ function OpenRefundRequestRow({
         {new Date(refundRequest.requestedAt).toLocaleDateString()}
       </td>
       <td className="px-4 py-3">
-        <fetcher.Form method="post">
-          <input type="hidden" name="intent" value="decline" />
+        <fetcher.Form method="post" className="flex gap-2">
           <input
             type="hidden"
             name="refundRequestId"
@@ -141,11 +148,22 @@ function OpenRefundRequestRow({
           />
           <Button
             type="submit"
+            name="intent"
+            value="approve"
+            size="sm"
+            disabled={busy}
+          >
+            {busy && pendingIntent === "approve" ? "Approving..." : "Approve"}
+          </Button>
+          <Button
+            type="submit"
+            name="intent"
+            value="decline"
             variant="outline"
             size="sm"
-            disabled={fetcher.state !== "idle"}
+            disabled={busy}
           >
-            {fetcher.state !== "idle" ? "Declining..." : "Decline"}
+            {busy && pendingIntent === "decline" ? "Declining..." : "Decline"}
           </Button>
         </fetcher.Form>
       </td>
