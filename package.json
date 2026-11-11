@@ -19,7 +19,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "seed-wayfinder-issues": "bash scripts/seed-wayfinder-issues.sh",
     "db:migrate": "drizzle-kit migrate",
-    "loc": "git ls-files | grep -vE '(lock|.db|_snapshot.json)' | xargs wc -l"
+    "loc": "git ls-files | grep -vE '(lock|.db|_snapshot.json)' | xargs wc -l",
+    "prototype:seed-feed": "tsx scripts/prototype-seed-knock-feed.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

@@ -2,6 +2,12 @@ import { Outlet } from "react-router";
 import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
+import { PrototypeSwitcher } from "~/components/prototype-switcher";
+import {
+  NOTIFICATION_FEED_VARIANTS,
+  useNotificationFeedPrototype,
+} from "~/components/notification-feed-prototype";
+import { getNotificationFeedPrototypeConfig } from "~/lib/knock-prototype.server";
 import { Toaster } from "sonner";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
@@ -213,6 +219,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    notificationFeed: getNotificationFeedPrototypeConfig(currentUserId),
   };
 }
 
@@ -225,7 +232,9 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    notificationFeed,
   } = loaderData;
+  const nf = useNotificationFeedPrototype(notificationFeed);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -233,6 +242,8 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
+        headerAction={nf.headerAction}
+        navExtra={nf.navExtra}
       />
       <main className="flex-1 overflow-y-auto">
         <Outlet />
@@ -244,6 +255,9 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         countryTierInfo={countryTierInfo}
         countries={countries}
       />
+      {notificationFeed && (
+        <PrototypeSwitcher variants={NOTIFICATION_FEED_VARIANTS} />
+      )}
       <Toaster position="bottom-right" richColors closeButton />
     </div>
   );
