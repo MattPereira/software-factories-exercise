@@ -14,11 +14,13 @@ export function noteDraftState(
   draft: string,
   savedBody: string | null
 ): NoteDraftState {
-  const length = draft.length;
+  // The save-note action trims before it validates and stores, so judge the
+  // draft as the server will see it.
+  const stored = draft.trim();
+  const length = stored.length;
   const tooLong = length > MAX_NOTE_LENGTH;
-  // The save-note action rejects a blank body, so a blank draft cannot be saved.
-  const empty = draft.trim().length === 0;
-  const unsaved = draft !== (savedBody ?? "");
+  const empty = length === 0;
+  const unsaved = stored !== (savedBody ?? "");
 
   return {
     length,

@@ -36,8 +36,20 @@ describe("describeNoteDraft", () => {
   it("cannot save a whitespace-only draft", () => {
     const state = describeNoteDraft("   \n ", null);
     expect(state.empty).toBe(true);
-    expect(state.unsaved).toBe(true);
     expect(state.canSave).toBe(false);
+  });
+
+  it("treats a saved note as saved when the draft only adds surrounding whitespace", () => {
+    const state = describeNoteDraft("  same\n", "same");
+    expect(state.unsaved).toBe(false);
+    expect(state.canSave).toBe(false);
+  });
+
+  it("counts the draft as the server will store it, without surrounding whitespace", () => {
+    const state = describeNoteDraft(` ${"a".repeat(MAX_NOTE_LENGTH)}\n`, null);
+    expect(state.length).toBe(MAX_NOTE_LENGTH);
+    expect(state.tooLong).toBe(false);
+    expect(state.canSave).toBe(true);
   });
 
   it("can save a draft exactly at the limit", () => {
