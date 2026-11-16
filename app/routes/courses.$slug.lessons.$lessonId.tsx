@@ -19,7 +19,7 @@ import { isBookmarked, toggleBookmark } from "~/lib/bookmarks.server";
 import { getNote, saveNote } from "~/lib/notes.server";
 import { MAX_NOTE_LENGTH } from "~/lib/notes";
 import { renderMarkdown } from "~/lib/markdown.server";
-import { parseFormData } from "~/lib/validation";
+import { parseFormData, parseParams } from "~/lib/validation";
 import { db } from "~/db";
 import { Button } from "~/components/ui/button";
 import { FullLesson } from "~/components/lesson/full-lesson";
@@ -53,6 +53,24 @@ const deleteCommentSchema = z.object({
   commentId: z.coerce.number().int(),
 });
 
+// Parsed only after the permission check, which already turns a malformed
+// lesson id into a 404.
+const lessonParamsSchema = z.object({
+  lessonId: z.coerce.number().int().positive(),
+});
+
+const submitQuizSchema = z.object({
+  quizId: z.coerce.number().int().positive(),
+});
+
+const quizAnswerSchema = z.tuple([
+  z
+    .string()
+    .regex(/^question-\d+$/)
+    .transform((key) => Number(key.slice("question-".length))),
+  z.coerce.number().int().positive(),
+]);
+
 function lessonRef(params: { slug: string; lessonId: string }): CourseRef {
   return { slug: params.slug, lessonId: params.lessonId };
 }
@@ -85,7 +103,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const { course, person, enrolled, view, take, manage } = decisions;
   const currentUserId = person?.id ?? null;
-  const lessonId = Number(params.lessonId);
+  const { lessonId } = parseParams(params, lessonParamsSchema);
 
   const courseWithDetails = lessonViewer.getCourseWithDetails(course.id);
   const lesson = lessonViewer.getLessonById(lessonId);
@@ -279,7 +297,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     ref
   );
   const currentUserId = person.id;
-  const lessonId = Number(params.lessonId);
+  const { lessonId } = parseParams(params, lessonParamsSchema);
 
   if (
     intent === "create-comment" ||
@@ -391,10 +409,11 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   if (intent === "submit-quiz") {
-    const quizId = Number(formData.get("quizId"));
-    if (isNaN(quizId)) {
+    const parsedQuiz = parseFormData(formData, submitQuizSchema);
+    if (!parsedQuiz.success) {
       throw data("Invalid quiz ID", { status: 400 });
     }
+    const { quizId } = parsedQuiz.data;
     // Scope the quiz to this lesson so a quiz elsewhere can't be reached by
     // posting its id to this route.
     const quiz = lessonViewer.getQuizById(quizId);
@@ -403,13 +422,11 @@ export async function action({ params, request }: Route.ActionArgs) {
     }
 
     const selectedAnswers: Record<number, number> = {};
-    for (const [key, value] of formData.entries()) {
-      if (key.startsWith("question-")) {
-        const questionId = Number(key.replace("question-", ""));
-        const optionId = Number(value);
-        if (!isNaN(questionId) && !isNaN(optionId)) {
-          selectedAnswers[questionId] = optionId;
-        }
+    for (const entry of formData.entries()) {
+      const answer = quizAnswerSchema.safeParse(entry);
+      if (answer.success) {
+        const [questionId, optionId] = answer.data;
+        selectedAnswers[questionId] = optionId;
       }
     }
 
