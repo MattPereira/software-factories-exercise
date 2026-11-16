@@ -5,7 +5,7 @@ import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
 import { Textarea } from "~/components/ui/textarea";
 import { cn, formatRelativeTime } from "~/lib/utils";
-import { describeNoteDraft } from "~/modules/note-draft";
+import { describeNoteDraft, type NoteDraftState } from "~/modules/note-draft";
 
 export type LessonNoteData = { body: string; updatedAt: string } | null;
 
@@ -42,14 +42,10 @@ export function LessonNote({ note }: { note: LessonNoteData }) {
           />
 
           <NoteFooter
-            canSave={state.canSave}
+            state={state}
             isSaving={isSaving}
             error={error}
-            unsaved={state.unsaved}
             updatedAt={note?.updatedAt ?? null}
-            length={state.length}
-            maxLength={state.maxLength}
-            tooLong={state.tooLong}
           />
 
           <p className="text-xs text-muted-foreground">
@@ -84,23 +80,15 @@ function NoteStatus({
 }
 
 function NoteFooter({
-  canSave,
+  state: { canSave, unsaved, length, maxLength, tooLong },
   isSaving,
   error,
-  unsaved,
   updatedAt,
-  length,
-  maxLength,
-  tooLong,
 }: {
-  canSave: boolean;
+  state: NoteDraftState;
   isSaving: boolean;
   error: string | undefined;
-  unsaved: boolean;
   updatedAt: string | null;
-  length: number;
-  maxLength: number;
-  tooLong: boolean;
 }) {
   return (
     <div className="flex items-center gap-3">
