@@ -9,6 +9,7 @@ let base: ReturnType<typeof setup>["base"];
 let viewer: ReturnType<typeof createLessonViewer>;
 let studentId: number;
 let lessonIds: number[];
+const now = new Date("2026-03-01T09:30:00.000Z");
 
 beforeEach(() => {
   ({ db, base, viewer } = setup());
@@ -34,24 +35,24 @@ describe("lesson progress", () => {
   });
 
   it("completes a lesson nobody opened", () => {
-    viewer.markLessonComplete(studentId, lessonIds[0]);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
 
     const progress = viewer.getLessonProgress(studentId, lessonIds[0]);
     expect(progress?.status).toBe(LessonProgressStatus.Completed);
-    expect(progress?.completedAt).not.toBeNull();
+    expect(progress?.completedAt).toBe(now.toISOString());
   });
 
   it("completes a lesson in progress without adding a second record", () => {
     const opened = viewer.markLessonInProgress(studentId, lessonIds[0]);
-    const completed = viewer.markLessonComplete(studentId, lessonIds[0]);
+    const completed = viewer.markLessonComplete(studentId, lessonIds[0], now);
 
     expect(completed.id).toBe(opened.id);
     expect(completed.status).toBe(LessonProgressStatus.Completed);
-    expect(completed.completedAt).not.toBeNull();
+    expect(completed.completedAt).toBe(now.toISOString());
   });
 
   it("does not move a completed lesson back to in progress", () => {
-    viewer.markLessonComplete(studentId, lessonIds[0]);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
     const reopened = viewer.markLessonInProgress(studentId, lessonIds[0]);
 
     expect(reopened.status).toBe(LessonProgressStatus.Completed);
@@ -66,7 +67,7 @@ describe("lesson progress", () => {
   });
 
   it("is per Student", () => {
-    viewer.markLessonComplete(base.instructor.id, lessonIds[0]);
+    viewer.markLessonComplete(base.instructor.id, lessonIds[0], now);
 
     expect(viewer.getLessonProgress(studentId, lessonIds[0])).toBeUndefined();
   });
@@ -74,9 +75,9 @@ describe("lesson progress", () => {
 
 describe("getLessonProgressForCourse", () => {
   it("lists this Student's progress on lessons in the course", () => {
-    viewer.markLessonComplete(studentId, lessonIds[0]);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
     viewer.markLessonInProgress(studentId, lessonIds[1]);
-    viewer.markLessonComplete(base.instructor.id, lessonIds[1]);
+    viewer.markLessonComplete(base.instructor.id, lessonIds[1], now);
 
     const records = viewer.getLessonProgressForCourse(
       studentId,
@@ -98,8 +99,8 @@ describe("getLessonProgressForCourse", () => {
       title: "X1",
       position: 1,
     });
-    viewer.markLessonComplete(studentId, lessonIds[0]);
-    viewer.markLessonComplete(studentId, otherLesson.id);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
+    viewer.markLessonComplete(studentId, otherLesson.id, now);
 
     expect(
       viewer
@@ -109,7 +110,7 @@ describe("getLessonProgressForCourse", () => {
   });
 
   it("is empty for a course with no modules", () => {
-    viewer.markLessonComplete(studentId, lessonIds[0]);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
 
     expect(viewer.getLessonProgressForCourse(studentId, 9999)).toEqual([]);
   });
@@ -117,7 +118,7 @@ describe("getLessonProgressForCourse", () => {
   it("is empty for a course with a module but no lessons", () => {
     const empty = addCourse(db, base, "empty-course");
     addModule(db, empty.id, { title: "Empty", position: 1 });
-    viewer.markLessonComplete(studentId, lessonIds[0]);
+    viewer.markLessonComplete(studentId, lessonIds[0], now);
 
     expect(viewer.getLessonProgressForCourse(studentId, empty.id)).toEqual([]);
   });
