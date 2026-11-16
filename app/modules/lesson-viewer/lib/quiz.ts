@@ -184,9 +184,3 @@ export function computeResult(
     return null;
   }
 }
-
-/**
- * Renders every comment body to sanitised HTML, preserving the reply nesting.
- * Comments are untrusted input, so this must be renderComment — never
- * renderMarkdown, which lets raw HTML through for trusted lesson content.
- */
