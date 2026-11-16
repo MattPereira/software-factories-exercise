@@ -218,6 +218,40 @@ describe("submitQuiz", () => {
     ]);
   });
 
+  it("loads and marks wrong a question that has no options yet", () => {
+    const { quiz, questions } = addQuiz(db, lessonId, [
+      trueFalse(true),
+      { type: schema.QuestionType.MultipleChoice, options: [] },
+    ]);
+    const [answered, empty] = questions;
+    const optionFromAnotherQuestion = answered.options[0].id;
+
+    expect(viewer.getQuizWithQuestions(quiz.id)?.questions[1]).toMatchObject({
+      id: empty.question.id,
+      options: [],
+    });
+    expect(
+      viewer.submitQuiz({
+        userId: base.user.id,
+        quizId: quiz.id,
+        selectedAnswers: { [empty.question.id]: optionFromAnotherQuestion },
+      })?.questionResults
+    ).toEqual([
+      {
+        questionId: answered.question.id,
+        correct: false,
+        selectedOptionId: null,
+        correctOptionId: null,
+      },
+      {
+        questionId: empty.question.id,
+        correct: false,
+        selectedOptionId: optionFromAnotherQuestion,
+        correctOptionId: null,
+      },
+    ]);
+  });
+
   it("is null, and logs, for an unknown quiz", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 

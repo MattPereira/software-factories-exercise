@@ -29,7 +29,6 @@ function getQuestions(db: Db, quizId: number) {
 /** Every option of the given questions in one query, grouped by question. */
 function getOptionsByQuestion(db: Db, questionIds: number[]) {
   const byQuestion = new Map<number, (typeof quizOptions.$inferSelect)[]>();
-  if (questionIds.length === 0) return byQuestion;
 
   const options = db
     .select()
