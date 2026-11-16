@@ -1,11 +1,12 @@
 import {
+  QuestionType,
   quizAnswers,
   quizAttempts,
   quizOptions,
   quizQuestions,
   quizzes,
 } from "~/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "./course";
 
 export function getQuizById(db: Db, quizId: number) {
@@ -16,25 +17,47 @@ export function getQuizByLessonId(db: Db, lessonId: number) {
   return db.select().from(quizzes).where(eq(quizzes.lessonId, lessonId)).get();
 }
 
-export function getQuizWithQuestions(db: Db, quizId: number) {
-  const quiz = db.select().from(quizzes).where(eq(quizzes.id, quizId)).get();
-  if (!quiz) return null;
-
-  const questions = db
+function getQuestions(db: Db, quizId: number) {
+  return db
     .select()
     .from(quizQuestions)
     .where(eq(quizQuestions.quizId, quizId))
     .orderBy(quizQuestions.position)
     .all();
+}
 
-  const questionsWithOptions = questions.map((question) => {
-    const options = db
-      .select()
-      .from(quizOptions)
-      .where(eq(quizOptions.questionId, question.id))
-      .all();
-    return { ...question, options };
-  });
+/** Every option of the given questions in one query, grouped by question. */
+function getOptionsByQuestion(db: Db, questionIds: number[]) {
+  const byQuestion = new Map<number, (typeof quizOptions.$inferSelect)[]>();
+  if (questionIds.length === 0) return byQuestion;
+
+  const options = db
+    .select()
+    .from(quizOptions)
+    .where(inArray(quizOptions.questionId, questionIds))
+    .orderBy(quizOptions.id)
+    .all();
+  for (const option of options) {
+    const list = byQuestion.get(option.questionId) ?? [];
+    list.push(option);
+    byQuestion.set(option.questionId, list);
+  }
+  return byQuestion;
+}
+
+export function getQuizWithQuestions(db: Db, quizId: number) {
+  const quiz = db.select().from(quizzes).where(eq(quizzes.id, quizId)).get();
+  if (!quiz) return null;
+
+  const questions = getQuestions(db, quizId);
+  const optionsByQuestion = getOptionsByQuestion(
+    db,
+    questions.map((question) => question.id)
+  );
+  const questionsWithOptions = questions.map((question) => ({
+    ...question,
+    options: optionsByQuestion.get(question.id) ?? [],
+  }));
 
   return { ...quiz, questions: questionsWithOptions };
 }
@@ -73,6 +96,69 @@ export type QuizSubmission = {
   selectedAnswers: Record<number, number>;
 };
 
+const SCORED_QUESTION_TYPES: ReadonlySet<QuestionType> = new Set([
+  QuestionType.MultipleChoice,
+  QuestionType.TrueFalse,
+]);
+
+function scoreQuestions(
+  db: Db,
+  quizId: number,
+  selectedAnswers: Record<number, number>
+): QuestionResult[] {
+  const questions = getQuestions(db, quizId);
+  const optionsByQuestion = getOptionsByQuestion(
+    db,
+    questions.map((question) => question.id)
+  );
+
+  return questions.map((question) => {
+    const selected = selectedAnswers[question.id];
+    if (!selected) {
+      return {
+        questionId: question.id,
+        correct: false,
+        selectedOptionId: null,
+        correctOptionId: null,
+      };
+    }
+
+    const correctOptionId = SCORED_QUESTION_TYPES.has(question.questionType)
+      ? (optionsByQuestion.get(question.id)?.find((o) => o.isCorrect)?.id ??
+        null)
+      : null;
+
+    return {
+      questionId: question.id,
+      correct: selected === correctOptionId,
+      selectedOptionId: selected,
+      correctOptionId,
+    };
+  });
+}
+
+function recordAttempt(
+  db: Db,
+  attempt: { userId: number; quizId: number; score: number; passed: boolean },
+  questionResults: QuestionResult[]
+) {
+  return db.transaction((tx) => {
+    const recorded = tx.insert(quizAttempts).values(attempt).returning().get();
+    for (const result of questionResults) {
+      if (result.selectedOptionId !== null) {
+        tx.insert(quizAnswers)
+          .values({
+            attemptId: recorded.id,
+            questionId: result.questionId,
+            selectedOptionId: result.selectedOptionId,
+          })
+          .run();
+      }
+    }
+    return recorded;
+  });
+}
+
 export function computeResult(
   db: Db,
   { userId, quizId, selectedAnswers }: QuizSubmission
@@ -84,97 +170,23 @@ export function computeResult(
       return null;
     }
 
-    const questions = db
-      .select()
-      .from(quizQuestions)
-      .where(eq(quizQuestions.quizId, quizId))
-      .orderBy(quizQuestions.position)
-      .all();
-
-    let correct = 0;
-    const total = questions.length;
-    const questionResults: QuestionResult[] = [];
-
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      const selected = selectedAnswers[q.id];
-
-      if (!selected) {
-        questionResults.push({
-          questionId: q.id,
-          correct: false,
-          selectedOptionId: null,
-          correctOptionId: null,
-        });
-        continue;
-      }
-
-      let correctOptionId = null;
-      if (q.questionType === "multiple_choice") {
-        const opts = db
-          .select()
-          .from(quizOptions)
-          .where(eq(quizOptions.questionId, q.id))
-          .all();
-        const correctOpt = opts.find((o) => o.isCorrect === true);
-        correctOptionId = correctOpt ? correctOpt.id : null;
-      } else if (q.questionType === "true_false") {
-        const correctOpt = db
-          .select()
-          .from(quizOptions)
-          .where(
-            and(
-              eq(quizOptions.questionId, q.id),
-              eq(quizOptions.isCorrect, true)
-            )
-          )
-          .get();
-        correctOptionId = correctOpt ? correctOpt.id : null;
-      }
-
-      const isCorrect = selected === correctOptionId;
-      if (isCorrect) correct++;
-
-      questionResults.push({
-        questionId: q.id,
-        correct: isCorrect,
-        selectedOptionId: selected,
-        correctOptionId,
-      });
-    }
-
+    const questionResults = scoreQuestions(db, quizId, selectedAnswers);
+    const total = questionResults.length;
+    const correct = questionResults.filter((result) => result.correct).length;
     const scoreValue = total > 0 ? correct / total : 0;
     const passed = scoreValue > 0.7;
-    const grade = calculateGrade(scoreValue);
 
-    const attempt = db
-      .insert(quizAttempts)
-      .values({
-        userId,
-        quizId,
-        score: scoreValue,
-        passed,
-      })
-      .returning()
-      .get();
-
-    for (const result of questionResults) {
-      if (result.selectedOptionId !== null) {
-        db.insert(quizAnswers)
-          .values({
-            attemptId: attempt.id,
-            questionId: result.questionId,
-            selectedOptionId: result.selectedOptionId,
-          })
-          .run();
-      }
-    }
+    const attempt = recordAttempt(
+      db,
+      { userId, quizId, score: scoreValue, passed },
+      questionResults
+    );
 
     return {
       attemptId: attempt.id,
       score: scoreValue,
       passed,
-      grade,
+      grade: calculateGrade(scoreValue),
       totalCorrect: correct,
       totalQuestions: total,
       questionResults,

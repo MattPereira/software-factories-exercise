@@ -242,6 +242,22 @@ describe("submitQuiz", () => {
     expect(log).toHaveBeenCalledWith(expect.any(Error));
     log.mockRestore();
   });
+
+  it("records no attempt when one of its answers cannot be recorded", () => {
+    const { quiz, questions } = addQuiz(db, lessonId, [trueFalse(true)]);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const missingOptionId = 9999;
+
+    expect(
+      viewer.submitQuiz({
+        userId: base.user.id,
+        quizId: quiz.id,
+        selectedAnswers: { [questions[0].question.id]: missingOptionId },
+      })
+    ).toBeNull();
+    expect(viewer.getBestAttempt(base.user.id, quiz.id)).toBeUndefined();
+    log.mockRestore();
+  });
 });
 
 describe("getBestAttempt", () => {
