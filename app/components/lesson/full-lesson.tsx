@@ -19,7 +19,7 @@ import { LessonBreadcrumb } from "./lesson-breadcrumb";
 import { CurriculumSidebar } from "./curriculum-sidebar";
 import { QuizSection } from "./quiz-section";
 import { LessonNote } from "./lesson-note";
-import type { LessonLoaderData } from "~/routes/courses.$slug.lessons.$lessonId";
+import type { LessonLoaderData } from "./lesson-loader-data";
 
 const AUTOPLAY_KEY = "cadence-autoplay";
 

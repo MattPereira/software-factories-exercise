@@ -4,11 +4,16 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import * as schema from "~/db/schema";
 import { users } from "~/db/schema";
 import type {
-  FeedCredentials,
-  NotificationData,
-  NotificationKind,
-} from "~/lib/notification-feed";
-import type { NotificationPreferences } from "~/lib/notification-preferences";
+  Notification,
+  Notifications,
+  NotificationPerson,
+} from "~/lib/notifications.port";
+
+export type {
+  Notification,
+  Notifications,
+  NotificationPerson,
+} from "~/lib/notifications.port";
 
 // ─── Notifications port ───
 // Cadence's side of sending Notifications (see GLOSSARY.md). Services take a
@@ -21,14 +26,6 @@ import type { NotificationPreferences } from "~/lib/notification-preferences";
 // - `fakeNotifications` (notifications.fake.server.ts): records what was sent.
 // - `loggingNotifications` (below): logs, used when KNOCK_SECRET_API_KEY is
 //   missing. Its feed is empty.
-
-/** Someone a Notification is about or for, as Cadence knows them. */
-export type NotificationPerson = {
-  id: number;
-  name: string;
-  email: string;
-  avatarUrl: string | null;
-};
 
 /** The user's row, as the person Notifications know. */
 export function toNotificationPerson(
@@ -60,58 +57,6 @@ export const NOTIFICATION_PERSON_COLUMNS = {
   name: users.name,
   email: users.email,
   avatarUrl: users.avatarUrl,
-};
-
-/**
- * Every Notification Cadence sends. `kind` names the Notification; its `data`
- * shape lives in notification-feed.ts, shared with the browser, which uses it
- * to write the row's copy and find its click target (`url`). `actor` is who
- * caused it; leave it out for Notifications Cadence sends itself.
- */
-export type Notification = {
-  [K in NotificationKind]: {
-    kind: K;
-    recipient: NotificationPerson;
-    actor?: NotificationPerson;
-    data: NotificationData<K>;
-  };
-}[NotificationKind];
-
-export type Notifications = {
-  /**
-   * Sends one Notification. The idempotency key makes a retry with the same
-   * key a no-op, e.g. `discussion-reply:<commentId>`.
-   */
-  send(notification: Notification, idempotencyKey: string): Promise<void>;
-
-  /**
-   * Credentials the browser needs to read `userId`'s Notification Feed live,
-   * or null when there is no feed to read.
-   */
-  feedCredentials(userId: number): Promise<FeedCredentials | null>;
-
-  /** Creates or updates the person's profile: name, email and avatar. */
-  identifyUser(person: NotificationPerson): Promise<void>;
-
-  /** The person's stored preference set, or null when they have none. */
-  getPreferences(userId: number): Promise<NotificationPreferences | null>;
-
-  /**
-   * Changes only the category × channel switches given. Everything else the
-   * person's stored set holds, including categories, channels and workflows
-   * Cadence doesn't know about, is kept.
-   */
-  mergePreferences(
-    userId: number,
-    preferences: NotificationPreferences
-  ): Promise<void>;
-
-  /**
-   * Archives every Notification whose `data.commentId` is `commentId`, i.e.
-   * the ones that comment caused, so they leave their recipients' feeds.
-   * Notifications that only mention it (a reply's `questionId`) stay.
-   */
-  archiveForComment(commentId: number): Promise<void>;
 };
 
 /**

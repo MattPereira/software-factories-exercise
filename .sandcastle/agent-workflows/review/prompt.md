@@ -11,22 +11,19 @@ Leave the human reviewer as little as possible. Fix every finding you can on
 `{{BRANCH}}`, and commit each fix through the pre-commit hook. The workflow
 pushes your commits. Leave `.github/` untouched.
 
-Every finding you leave unfixed becomes an inline comment on its file and
-line. You will be asked for them as structured output.
+Your fixes target the lines this PR wrote. When a finding sits in code the PR
+moved without changing, or is a bug outside the ticket, make it a follow-up:
+the workflow files each one as its own issue.
 
-Write your verdict on the branch, after your fixes, to /tmp/review-verdict.md:
+You will be asked for the whole review as structured output: each verdict,
+each finding fixed or left, the follow-ups, the rules you missed, and your
+screenshots. The workflow renders the verdict comment and the inline comments
+from it, so you write each finding once. Keep the reason and each summary to
+one sentence.
 
-    ## Standards: PASS | CHANGES REQUESTED
-    One line of reasoning, then the findings, worst first: each one fixed
-    (its commit) or left (its file and line), citing the rule by heading.
+When a fix changes the shape of the code (a query loop collapsed, a module
+split, a call moved), draw that one change in the axis's `sketch`. Use the
+visual menu in .agents/skills/pr/SKILL.md, section "Summary".
 
-    ## Spec: PASS | CHANGES REQUESTED
-    One line of reasoning, then the findings, fixed or left.
-
-    ## Rules this review wanted and could not find
-    Anything you wanted to fail the change for that no standard covers.
-    The retro reads this list.
-
-When the change shows in the UI, save screenshots as PNGs in /tmp/evidence/.
-Reference each in the verdict by its absolute path, e.g.
-`![after](/tmp/evidence/after.png)`. The workflow uploads them.
+When your fixes change the UI, save screenshots as PNGs in /tmp/evidence/.
+The workflow uploads them.

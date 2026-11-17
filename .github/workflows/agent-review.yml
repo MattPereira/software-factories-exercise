@@ -29,9 +29,12 @@ name: Agent — Review A Pull Request
 # IT FIXES WHAT IT CAN
 #   A review that only lists findings hands the work to a human. This one
 #   fixes every finding it can, as commits on the PR's branch, and leaves the
-#   rest as inline comments on their file and line. The workflow pushes the
-#   commits, never forced. If someone pushed to the branch during the run,
-#   GitHub rejects the push, and the commits go to a new branch,
+#   rest as inline comments on their file and line. Findings in code the PR
+#   only moved become follow-up issues instead. The agent returns the review
+#   as structured output and review.ts renders the verdict from it, so each
+#   finding is written once. The workflow pushes the commits, never forced.
+#   If someone pushed to the branch during the run, GitHub rejects the push,
+#   and the commits go to a new branch,
 #   `<pr branch>-<run id>`, opened as a draft PR against the same base. The
 #   original PR gets the `agent:blocked` label, because a person has to pick
 #   which to keep.
@@ -246,6 +249,31 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
 
+      - name: File the follow-up issues
+        # Findings in code the PR only moved, and bugs outside its ticket, get
+        # their own issues instead of growing this PR. Each one is linked from
+        # the verdict. This step runs nothing the agent wrote: it reads JSON
+        # and calls `gh`.
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+        run: |
+          set -euo pipefail
+          follow_ups="$RUNNER_TEMP/review-follow-ups.json"
+          count="$(jq 'length' "$follow_ups")"
+          if [ "$count" -eq 0 ]; then
+            echo "No follow-ups."
+            exit 0
+          fi
+          printf '\n## Follow-up issues\n\n' >> /tmp/review-verdict.md
+          for i in $(seq 0 $((count - 1))); do
+            title="$(jq -r ".[$i].title" "$follow_ups")"
+            jq -r ".[$i].body" "$follow_ups" > /tmp/follow-up.md
+            printf '\n\nFound by the review of #%s — [logs](%s).\n' \
+              "$PR_NUMBER" "$RUN_URL" >> /tmp/follow-up.md
+            url="$(gh issue create --title "$title" --body-file /tmp/follow-up.md)"
+            echo "- ${url}: ${title}" >> /tmp/review-verdict.md
+          done
+
       - name: Post the verdict on the pull request
         if: always()
         env:
@@ -281,8 +309,9 @@ jobs:
       - name: Post the inline comments
         # One review, event COMMENT, with a comment on each line the agent
         # left a finding on. They go where the fixes went: the fallback PR if
-        # the push was rejected. review.ts already dropped every comment
-        # outside the diff, because GitHub rejects the whole review for one.
+        # the push was rejected. review.ts already moved every comment
+        # outside the diff into the verdict, because GitHub rejects the whole
+        # review for one.
         env:
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
           TARGET: ${{ steps.fallback.outputs.number || github.event.pull_request.number }}
