@@ -17,6 +17,7 @@ import {
   User,
   Moon,
   Sun,
+  type LucideIcon,
 } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { DevUI } from "~/components/dev-ui";
@@ -118,7 +119,7 @@ function getLessonCountForCourse(courseId: number) {
   return count?.count ?? 0;
 }
 
-const STAT_ICONS: Record<LandingStat["key"], typeof BookOpen> = {
+const STAT_ICONS: Record<LandingStat["key"], LucideIcon> = {
   courses: BookOpen,
   categories: GraduationCap,
   pace: Users,
