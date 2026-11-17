@@ -5,7 +5,7 @@ import { MapPin, ShieldAlert } from "lucide-react";
 import { countryName } from "~/lib/ppp";
 import { LessonBreadcrumb } from "./lesson-breadcrumb";
 import { CurriculumSidebar } from "./curriculum-sidebar";
-import type { LessonLoaderData } from "~/routes/courses.$slug.lessons.$lessonId";
+import type { LessonLoaderData } from "./lesson-loader-data";
 
 export function LockedLesson({
   data: { course, curriculum, module: mod, lesson, enrolled, lockedReason },
