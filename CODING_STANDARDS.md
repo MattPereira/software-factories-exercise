@@ -42,10 +42,6 @@ Test setup calls the module's own functions. When the function you need does
 not exist, add it to the module rather than inserting rows directly, so a
 change to how the module stores its data leaves its tests alone.
 
-## Keep files under 5000 tokens
-
-Keep every file under 5000 tokens.
-
 ## Wrap related writes in a transaction
 
 Two writes that must both land, or neither, go in a transaction. If the second
@@ -96,6 +92,8 @@ Anything that touches the outside world belongs in an effect or an action.
 
 If a value can be worked out from another value you already hold, work it out.
 Storing it gives you two things that must agree, and one day they will not.
+A value the schema already stores is read, not hardcoded: a quiz with a
+`passingScore` column is graded against that column, not against `0.7`.
 
 ```ts
 // Bad
