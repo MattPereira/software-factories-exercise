@@ -17,9 +17,11 @@ import {
   User,
   Moon,
   Sun,
+  type LucideIcon,
 } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { DevUI } from "~/components/dev-ui";
+import { landingStats, type LandingStat } from "~/modules/landing-page";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, like, and, or, sql } from "drizzle-orm";
@@ -117,6 +119,12 @@ function getLessonCountForCourse(courseId: number) {
   return count?.count ?? 0;
 }
 
+const STAT_ICONS: Record<LandingStat["key"], LucideIcon> = {
+  courses: BookOpen,
+  categories: GraduationCap,
+  pace: Users,
+};
+
 export function meta() {
   return [
     { title: "Cadence — Learn at your own pace" },
@@ -150,8 +158,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   return {
     featuredCourses: featured,
-    totalCourses: courses.length,
-    totalCategories: categories.length,
+    stats: landingStats({
+      totalCourses: courses.length,
+      totalCategories: categories.length,
+    }),
     users: users.map((u) => ({ id: u.id, name: u.name, role: u.role })),
     currentUser: currentUser
       ? { id: currentUser.id, name: currentUser.name, role: currentUser.role }
@@ -165,8 +175,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 export default function Home({ loaderData }: Route.ComponentProps) {
   const {
     featuredCourses,
-    totalCourses,
-    totalCategories,
+    stats,
     users,
     currentUser,
     devCountry,
@@ -234,52 +243,60 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
 
-      <section className="mx-auto max-w-6xl px-6 py-24 text-center">
-        <h1 className="text-5xl font-bold tracking-tight sm:text-6xl">
-          Learn to code,
-          <br />
-          <span className="text-muted-foreground">at your own pace</span>
-        </h1>
-        <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-          Structured courses built by experienced instructors. Track your
-          progress, take quizzes, and build real-world skills.
-        </p>
-        <div className="mt-10 flex items-center justify-center gap-4">
-          <Button asChild size="lg">
-            <Link to="/courses">
-              Browse Courses
-              <ArrowRight className="ml-2 size-4" />
-            </Link>
-          </Button>
+      <section className="mx-auto max-w-6xl px-6 pt-20 pb-16 sm:pt-28">
+        <div className="max-w-3xl">
+          <p className="mb-6 inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-sm font-medium text-muted-foreground">
+            <span className="size-2 rounded-full bg-primary" />
+            Courses for developers
+          </p>
+          <h1 className="text-5xl font-bold tracking-tight sm:text-7xl">
+            Learn to code,
+            <br />
+            <span className="text-muted-foreground">at your own pace</span>
+          </h1>
+          <p className="mt-6 max-w-xl text-lg text-muted-foreground">
+            Structured courses built by experienced instructors. Track your
+            progress, take quizzes, and build real-world skills.
+          </p>
+          <div className="mt-10 flex flex-wrap items-center gap-4">
+            <Button asChild size="lg">
+              <Link to="/courses">
+                Browse Courses
+                <ArrowRight className="ml-2 size-4" />
+              </Link>
+            </Button>
+            {currentUser ? (
+              <Button asChild size="lg" variant="outline">
+                <Link to="/dashboard">Go to your dashboard</Link>
+              </Button>
+            ) : (
+              <Button asChild size="lg" variant="outline">
+                <Link to="/signup">Create a free account</Link>
+              </Button>
+            )}
+          </div>
         </div>
       </section>
 
-      <section className="border-y border-border bg-muted/50 py-16">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-6 sm:grid-cols-3">
-          <div className="text-center">
-            <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-lg bg-primary/10">
-              <BookOpen className="size-6 text-primary" />
-            </div>
-            <p className="text-2xl font-bold">{totalCourses}</p>
-            <p className="text-sm text-muted-foreground">Available Courses</p>
-          </div>
-          <div className="text-center">
-            <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-lg bg-primary/10">
-              <GraduationCap className="size-6 text-primary" />
-            </div>
-            <p className="text-2xl font-bold">{totalCategories}</p>
-            <p className="text-sm text-muted-foreground">Categories</p>
-          </div>
-          <div className="text-center">
-            <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-lg bg-primary/10">
-              <Users className="size-6 text-primary" />
-            </div>
-            <p className="text-2xl font-bold">Self-paced</p>
-            <p className="text-sm text-muted-foreground">
-              Learn on your schedule
-            </p>
-          </div>
-        </div>
+      <section className="border-y border-border bg-muted/50 py-12">
+        <dl className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-6 sm:grid-cols-3">
+          {stats.map((stat) => {
+            const Icon = STAT_ICONS[stat.key];
+            return (
+              <div key={stat.key} className="flex items-start gap-4">
+                <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                  <Icon className="size-6 text-primary" />
+                </div>
+                <div className="flex flex-col">
+                  <dt className="order-2 text-sm text-muted-foreground">
+                    {stat.label}
+                  </dt>
+                  <dd className="order-1 text-2xl font-bold">{stat.value}</dd>
+                </div>
+              </div>
+            );
+          })}
+        </dl>
       </section>
 
       {featuredCourses.length > 0 && (
@@ -340,9 +357,20 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         </section>
       )}
 
-      <footer className="border-t border-border py-8">
-        <div className="mx-auto max-w-6xl px-6 text-center text-sm text-muted-foreground">
-          Cadence
+      <footer className="border-t border-border py-10">
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-bold tracking-tight">Cadence</p>
+            <p className="text-sm text-muted-foreground">
+              Learn to code, at your own pace.
+            </p>
+          </div>
+          <Link
+            to="/courses"
+            className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Browse all courses
+          </Link>
         </div>
       </footer>
 
