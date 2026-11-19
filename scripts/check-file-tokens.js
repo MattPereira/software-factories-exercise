@@ -36,9 +36,7 @@ if (oversized.length > 0) {
   }
   console.error(`
 Split each file before you commit. Do not delete code or squash it onto fewer
-lines to get under the limit. Commit the split on its own, with no change in
-behaviour, before the commit that carries your change, so a reviewer can read
-each one separately.
+lines to get under the limit.
 
 How to split:
 - Find the seams. Look for groups of functions, components, or tests that

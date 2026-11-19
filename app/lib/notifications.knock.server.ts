@@ -14,7 +14,7 @@ import {
 import type {
   NotificationPerson,
   Notifications,
-} from "~/lib/notifications.port";
+} from "~/lib/notifications.server";
 
 // ─── Knock adapter for the Notifications port ───
 // The only server code that imports the Knock SDK or knows Knock's keys.
