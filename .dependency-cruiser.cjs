@@ -71,7 +71,8 @@ module.exports = {
         "No dependency cycles. Scope to `^${R}/` if you want to allow cycles outside packages.",
       severity: "error",
       from: {},
-      to: { circular: true },
+      // A type-only cycle compiles away, so it is not one.
+      to: { circular: true, viaOnly: { dependencyTypesNot: ["type-only"] } },
     },
 
     // --- Layering (optional, off by default) ----------------------------------
@@ -104,11 +105,19 @@ module.exports = {
         path: ["^app/db/index\\.ts$", "^node_modules/better-sqlite3/"],
       },
     },
+    {
+      name: "server-code-no-components",
+      comment:
+        "Modules and app/lib hold data and logic; components depend on them, never the reverse. A type a component and a module share lives in the module.",
+      severity: "error",
+      from: { path: "^app/(modules|lib)/" },
+      to: { path: "^app/components/" },
+    },
   ],
   options: {
     doNotFollow: { path: "node_modules" },
-    // Type-only imports count, so `no-circular` sees a component importing a
-    // type from the route that renders it.
+    // Type-only imports count: a server file that imports a component's type
+    // still depends on the component.
     tsPreCompilationDeps: true,
     tsConfig: { fileName: "tsconfig.json" },
     enhancedResolveOptions: {
